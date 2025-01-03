@@ -43,8 +43,12 @@ def fromimport(mod, frm): return getattr(__import__(mod, fromlist=[frm]), frm)
 def strip_parens(fst:str): return fst[1:-1] if fst[0] == '(' and fst[-1] == ')' and fst[1:-1].find('(') <= fst[1:-1].find(')') else fst
 def ceildiv(num, amt): return int(ret) if isinstance((ret:=-(num//-amt)), float) else ret
 def round_up(num:int, amt:int) -> int: return (num+amt-1)//amt * amt
+def lo32(x:Any) -> Any: return x & 0xFFFFFFFF # Any is sint
+def hi32(x:Any) -> Any: return x >> 32 # Any is sint
 def data64(data:Any) -> tuple[Any, Any]: return (data >> 32, data & 0xFFFFFFFF) # Any is sint
 def data64_le(data:Any) -> tuple[Any, Any]: return (data & 0xFFFFFFFF, data >> 32) # Any is sint
+def getbits(value: int, start: int, end: int): return (value >> start) & ((1 << end-start+1) - 1)
+def i2u(bits: int, value: int): return value if value >= 0 else (1<<bits)+value
 def merge_dicts(ds:Iterable[dict[T,U]]) -> dict[T,U]:
   kvs = set([(k,v) for d in ds for k,v in d.items()])
   assert len(kvs) == len(set(kv[0] for kv in kvs)), f"cannot merge, {kvs} contains different values for the same key"
@@ -77,21 +81,19 @@ def getenv(key:str, default=0): return type(default)(os.getenv(key, default))
 def temp(x:str) -> str: return (pathlib.Path(tempfile.gettempdir()) / x).as_posix()
 
 class Context(contextlib.ContextDecorator):
-  stack: ClassVar[list[dict[str, int]]] = [{}]
   def __init__(self, **kwargs): self.kwargs = kwargs
   def __enter__(self):
-    Context.stack[-1] = {k:o.value for k,o in ContextVar._cache.items()} # Store current state.
-    for k,v in self.kwargs.items(): ContextVar._cache[k].value = v # Update to new temporary state.
-    Context.stack.append(self.kwargs) # Store the temporary state so we know what to undo later.
+    self.old_context:dict[str, int] = {k:v.value for k,v in ContextVar._cache.items()}
+    for k,v in self.kwargs.items(): ContextVar._cache[k].value = v
   def __exit__(self, *args):
-    for k in Context.stack.pop(): ContextVar._cache[k].value = Context.stack[-1].get(k, ContextVar._cache[k].value)
+    for k,v in self.old_context.items(): ContextVar._cache[k].value = v
 
 class ContextVar:
   _cache: ClassVar[dict[str, ContextVar]] = {}
   value: int
   key: str
   def __init__(self, key, default_value):
-    assert key not in ContextVar._cache, f"attempt to recreate ContextVar {key}"
+    if key in ContextVar._cache: raise RuntimeError(f"attempt to recreate ContextVar {key}")
     ContextVar._cache[key] = self
     self.value, self.key = getenv(key, default_value), key
   def __bool__(self): return bool(self.value)
@@ -267,7 +269,7 @@ def cpu_objdump(lib, objdump_tool='objdump'):
 def from_mv(mv:memoryview, to_type=ctypes.c_char):
   return ctypes.cast(ctypes.addressof(to_type.from_buffer(mv)), ctypes.POINTER(to_type * len(mv))).contents
 def to_mv(ptr:int, sz:int) -> memoryview: return memoryview(ctypes.cast(ptr, ctypes.POINTER(ctypes.c_uint8 * sz)).contents).cast("B")
-def mv_address(mv:memoryview): return ctypes.addressof(ctypes.c_char.from_buffer(mv))
+def mv_address(mv): return ctypes.addressof(ctypes.c_char.from_buffer(mv))
 def to_char_p_p(options: list[bytes], to_type=ctypes.c_char):
   return (ctypes.POINTER(to_type) * len(options))(*[ctypes.cast(ctypes.create_string_buffer(o), ctypes.POINTER(to_type)) for o in options])
 @functools.lru_cache(maxsize=None)
